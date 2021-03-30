@@ -1,0 +1,710 @@
+---
+title: "HLL Textbook Replication Project"
+subtitle: 'Assessing introspective linguistic judgments quantitatively: The case of The Syntax of Chinese'
+author: "Zhong Chen, Yuhang Xu, Zhiguo Xie"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    highlight: tango
+    toc: yes
+    toc_depth: 3
+    toc_float: true
+   # number_sections: true
+---
+
+```{r setup, include=FALSE,cache=TRUE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE)
+```
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(lmerTest)
+library(scales)
+library(emmeans)
+```
+
+# Acceptability Judgment Experiment
+## Cleaning data: AJ Experiment
+```{r message=FALSE, warning=FALSE}
+###set your working directory to the source file localtion###
+
+d.HLL<-read.csv("../data/HLL-TEST-2018_08.44_numeric_values.csv")
+header <- names(d.HLL)  
+d.HLL<- read.csv("../data/HLL-TEST-2018_08.44_numeric_values.csv", col.names = header, skip = 2) 
+item.code.keys <- read.csv("../data/itemcodekeyHLL.csv")#add conditions
+
+todrop <- c("StartDate","EndDate","Finished","RecordedDate","RecipientLastName","RecipientFirstName", "RecipientEmail","ExternalReference" ,"LocationLatitude","LocationLongitude" ,"DistributionChannel", "IPAddress","UserLanguage")
+
+d.HLL%>% 
+  select(-one_of(todrop)) %>%
+  rename(ExpLists = FL_4_DO, SubGender = Q1.6, SubAge =Q1.7, L1= Q1.8 , Education=Q1.9,Dialects= Q1.15_1, SubID=ResponseId , L2=Q1.16_1 )%>%
+  filter(Status == 0 & Progress==100 ) %>%  #real participants+finished 
+  select(-Status,-Progress,-Q1.3,-Q1.4,- Q1.17,-starts_with("Q2."),-starts_with("Q8.")) %>%
+  gather(key = Qnumber,value=choice,Q3.1:Q7.161,na.rm = T) %>%#widd to long
+  arrange(SubID, Qnumber) %>% 
+  group_by(SubID) %>%   #add scores
+  mutate(zscore = scale(choice)) %>% 
+  ungroup()%>%
+  mutate_at(vars(matches("_DO")), as.character)%>%
+  mutate_at(vars(matches("ExpLists")), as.character)%>%
+  mutate(TrialOrder = case_when(ExpLists == "list-pair-1" ~ list.pair.1_DO,
+                                ExpLists == "list-pair-2" ~ list.pair.2_DO,
+                                ExpLists == "list-filler-a" ~ list.filler.a_DO,
+                                ExpLists == "list-filler-b" ~ list.filler.b_DO,
+                                ExpLists == "list-filler-c" ~ list.filler.c_DO))%>%
+  select(-matches("_DO"))%>%
+  inner_join(y=item.code.keys)->d.HLL.cond #add experimental conditions
+
+#add trial order sequence 
+seqnum=as.character(c(1:158))
+d.HLL.cond %>%
+  select(SubID,TrialOrder) %>%
+  distinct()%>%
+  separate(TrialOrder, into=seqnum, sep = "\\|")%>%
+  gather(key = QSEQ,value=Qnumber,"1":"158",na.rm = T) %>%#widd to long
+  inner_join(y=d.HLL.cond)->d.HLL.cond
+```
+
+## Participants & Lists information: AJ Experiment  
+```{r}
+#subjects# in each group
+  d.HLL.cond %>%
+  group_by(ExpLists) %>%
+  summarise(count = n_distinct(SubID))
+
+#subjects age infor
+d.HLL.cond %>%
+  group_by(SubGender) %>%
+  summarise(count = n_distinct(SubID),age_mean = mean(as.numeric(as.character(SubAge))),age_SD = sd(as.numeric(as.character(SubAge))))
+
+#subjects who have "linguistics" related background
+d.HLL.cond %>%
+  filter(grepl("语言",Q1.12)==T|grepl("语言",Q1.13)==T) %>%
+  summarise(count = n_distinct(SubID))
+```
+
+
+```{r}
+#check "catch" trials
+#exclude subjects failed any catch-question
+d.HLL.cond  %>%
+  filter(Category=="catch") %>%
+  select(SubID,choice,SenType,ExpLists)  %>%
+  mutate(CorrectA = ifelse(SenType == "catch2", 2, 5)) %>%
+  filter(choice!=CorrectA) %>%
+  select(SubID)%>%
+  unique()%>%
+  droplevels()%>%
+  .$SubID->sub.exclude
+  
+#subjects exclude in each group
+d.HLL.cond  %>%
+  filter(Category=="catch") %>%
+  select(SubID,choice,SenType,ExpLists)  %>%
+  mutate(CorrectA = ifelse(SenType == "catch2", 2, 5)) %>%
+  filter(choice!=CorrectA) %>%
+  group_by(ExpLists) %>%
+  summarise(count = n_distinct(SubID))
+```
+
+
+
+## All data: "pair" + "other" lists
+```{r}
+d.HLL.cond %>%
+  filter(!SubID%in%sub.exclude) %>%
+  filter(Category!="catch") %>%
+  mutate(SenCon=ifelse(SenType=="g","good",
+                       ifelse(SenType=="q","questionable","bad")))->d.HLL.all
+
+d.HLL.all %>%
+  group_by(SenCon) %>%
+  summarise(MeanScore=mean(choice))
+```
+
+```{r}
+#theme for plots
+theme.yuhang <- theme_bw()+
+  theme(axis.text=element_text(size=12),axis.title=element_text(size=14,face="bold"))+
+  theme(legend.text = element_text(size=12))+
+  theme(legend.title = element_text(size=14, face="bold"))+
+  theme(legend.title.align  = 0.5)+
+  theme(strip.text = element_text(size=12))+
+  theme(title = element_text(size=14, face="bold"))+
+  theme(plot.title = element_text(hjust = 0.5))
+theme_set(theme.yuhang)
+```
+
+```{r warning=FALSE}
+ggplot(d.HLL.all, aes(x = SenCon, y=as.numeric(choice)))+
+  stat_summary(geom = "bar",fun.y = "mean", aes(fill=SenCon),colour="black")+
+  stat_summary(geom = "errorbar", fun.data = "mean_cl_boot",width = 0.1)+
+  scale_x_discrete(limits=c("bad","questionable","good"))+
+  scale_fill_manual(limits=c("bad","questionable","good"),values=c("#F8766D", "#00BA38", "#00BFC4"))+
+  coord_cartesian(ylim =c(0,7))+
+  scale_y_continuous(breaks=seq(0,7,1))+
+  labs(x = "Sentence Type", y="Acceptability Rating")+
+  guides(colour=FALSE,fill=FALSE)->p.overall.ex1
+p.overall.ex1
+```
+
+```{r message=FALSE, warning=FALSE}
+d.HLL.all %>%
+  mutate(contrast_BvQ =ifelse(SenCon == "bad",1,0))%>%
+  mutate(contrast_GvQ =ifelse(SenCon == "good",1,0))->d.HLL.all
+
+#use question as the baseline level
+m.alldata<-lmer(zscore~contrast_BvQ+contrast_GvQ+(1+contrast_BvQ+contrast_GvQ |SubID)+(1+contrast_BvQ+contrast_GvQ|ItemNum),data=d.HLL.all)
+summary(m.alldata)$coefficients
+
+# m.alldata.raw<-lmer(choice~contrast_BvQ+contrast_GvQ+(1+contrast_BvQ+contrast_GvQ|SubID)+(1+contrast_BvQ+contrast_GvQ|ItemNum),data=d.HLL.all)
+# summary(m.alldata.raw)$coefficients
+
+
+# use bad as the baseline level
+#summary(lmer(choice~SenCon+(1+SenCon|SubID)+(1+SenCon|ItemNum),data=d.HLL.all))
+# m.allbadasbaseline<-lmer(choice~SenCon+(1+SenCon|SubID)+(1+SenCon|ItemNum),data=d.HLL.all)
+# summary(m.allbadasbaseline)
+
+m.allbadasbaseline.z<-lmer(zscore~SenCon+(1+SenCon|SubID)+(1+SenCon|ItemNum),data=d.HLL.all)
+summary(m.allbadasbaseline.z)$coefficients
+```
+
+```{r}
+#we will look at "other" lists  only!
+# I also tried all data
+d.HLL.all %>%
+  filter(Category!="pair")%>%
+  group_by(ItemNum, SenCon)  %>%
+  summarise(Avescore=mean(choice)) %>%
+  ggplot(aes(x = ItemNum, y=Avescore,label=ItemNum))+
+  geom_text(aes(colour=SenCon))+
+  labs(x = "Contrast Number", y="Average Acceptability Rating")+
+  scale_color_manual(name="Sentence Type",limits=c("bad","questionable","good"),values=c("#F8766D", "#00BA38", "#00BFC4"))+
+  geom_hline(yintercept = 4,colour="grey",linetype = 2,size = 0.3)+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),axis.ticks.x = element_blank(),line = element_blank())
+```
+
+
+## Visualiztions: AJ Experiment - "pair" lists 
+```{r}
+#we will look at the "pair" first
+d.HLL.cond %>%
+  filter(!SubID%in%sub.exclude) %>%
+  filter(Category!="catch") %>%
+  mutate(SenCon=ifelse(SenType=="g","good",
+                       ifelse(SenType=="q","questionable","bad"))) %>%
+  filter(ExpLists %in% c("list-pair-1","list-pair-2")) -> d.HLL.pair  
+```
+
+
+
+```{r raw score plot, message=FALSE, warning=FALSE}
+#plot for all pairs
+ggplot(d.HLL.pair, aes(x = SenCon, y=as.numeric(choice)))+
+  geom_jitter(alpha = 0.1, aes(colour=SenCon))+
+  stat_summary(geom = "line", fun.y = "mean", aes(group=ItemNum),alpha=0.2) +
+  stat_summary(geom = "point",fun.y = "mean", aes(colour=SenCon),size = 6)+
+  stat_summary(geom = "errorbar", fun.data = "mean_cl_boot",width = 0.1)+
+  scale_y_continuous(breaks=seq(0,7,1))+
+  labs(x = "Sentence Type", y="Acceptability Rating")+
+  geom_hline(yintercept = 4,colour="blue",linetype = 2)+
+  guides(colour=FALSE,fill=F)->p.pair.all
+p.pair.all
+
+#by-item plot
+ggplot(d.HLL.pair,aes(x = SenCon, y=as.numeric(choice)))+
+  stat_summary(geom = "point",fun.y = "mean", aes(color=SenCon))+
+  stat_summary(geom = "errorbar", fun.data = "mean_cl_boot",width = 0.1)+
+  geom_hline(yintercept = 4,colour="blue",linetype = 2)+
+  facet_wrap(~ItemNum)+
+  scale_y_continuous(breaks=seq(-1,8,2))+
+  labs(x = "Sentence Type", y="Acceptability Rating")+
+  guides(colour=FALSE) +
+  theme_bw()->p.pair.byitem
+#p.pair.byitem see plots folder for item-by-item plot
+```
+
+```{r z-score plot, message=FALSE, warning=FALSE}
+#Z-score version plot for all pairs
+ggplot(d.HLL.pair, aes(x = SenCon, y=as.numeric(zscore)))+
+  geom_jitter(alpha = 0.05, aes(colour=SenCon))+
+  stat_summary(geom = "line", fun.y = "mean", aes(group=ItemNum),alpha=0.2) +
+  stat_summary(geom = "point",fun.y = "mean", aes(color=SenCon),size=6)+
+  stat_summary(geom = "errorbar", fun.data = "mean_cl_boot",width = 0.1)+
+  labs(x = "Sentence Type", y="Acceptability Rating")+
+  geom_hline(yintercept = 0,colour="blue",linetype = 2)+
+  guides(colour=FALSE)->p.pair.all.z
+p.pair.all.z
+
+#z-score by-item plot
+ggplot(d.HLL.pair,aes(x = SenCon, y=as.numeric(zscore)))+
+ # geom_violin(alpha = 0.5,aes(colour=SenCon))+
+  stat_summary(geom = "point",fun.y = "mean", aes(color=SenCon),size=2)+
+  stat_summary(geom = "errorbar", fun.data = "mean_cl_boot",width = 0.1)+
+  geom_hline(yintercept = 0,colour="blue",linetype = 2)+
+  facet_wrap(~ItemNum)+
+  scale_y_continuous(breaks=seq(-3,3,1))+
+  labs(x = "Sentence Type", y="Acceptability Rating")+
+  guides(colour=FALSE) +
+  theme_bw()->p.pair.byitem.z
+#p.pair.byitem.z See plots folder for item-by-item plot
+```
+
+```{r difference score}
+# difference scores between good and bad 
+d.HLL.pair %>%
+  group_by(ItemNum, SenCon)  %>%
+  summarise(Avescore=mean(choice)) %>%
+  mutate(DiffScore =  Avescore-lag(Avescore)) %>%
+  filter(!is.na(DiffScore))  %>%
+  ggplot(aes(x = ItemNum, y=DiffScore,label = ItemNum))+
+  geom_text(size=3)+
+  labs(x = "Contrast Number", y="Acceptability Rating Difference")+
+  geom_hline(yintercept = 0,colour="blue",linetype = 2)+
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        line = element_blank())->p.pair.differscore
+p.pair.differscore
+```
+
+```{r sequence data plot, message=FALSE, warning=FALSE}
+ggplot(d.HLL.pair,aes(x =  as.numeric(QSEQ) , y=as.numeric(choice),colour=SenCon))+
+  stat_summary(geom = "point",fun.y = "mean")+
+  stat_summary(geom = "errorbar", fun.data = "mean_cl_boot",aes(colour=SenCon),width = 0.1,alpha=0.5)+
+  geom_smooth(method = "lm")+
+  geom_hline(yintercept = 4,colour="blue",linetype = 2)+
+  labs(x = "Trial Sequence", y="Mean Acceptability Rating")+
+  guides(colour=guide_legend(title="Sentence Type")) ->p.pair.sequence
+
+p.pair.sequence
+```
+
+## Analysis: AJ Experiment 
+```{r}
+#coding variables
+d.HLL.pair$SenTypeC<-ifelse(d.HLL.pair$SenCon=="good", 1,-1)
+d.HLL.pair$QSEQ<-as.numeric(d.HLL.pair$QSEQ)
+d.HLL.pair$SubAge<-as.numeric(d.HLL.pair$SubAge)
+
+#check control variables
+m.control<-lmer(choice~QSEQ+SubGender+SubAge+Education+(1|SubID)+(1|ItemNum),data=d.HLL.pair )
+summary(m.control)$coefficients
+
+m.control.z<-lmer(zscore~QSEQ+SubGender+SubAge+Education+(1|SubID)+(1|ItemNum),data=d.HLL.pair )
+summary(m.control.z)$coefficients
+```
+
+
+```{r}
+#all pairs raw score models
+m.all<-lmer(choice~SenTypeC+(1+SenTypeC|SubID)+(1+SenTypeC|ItemNum),data=d.HLL.pair)
+summary(m.all)$coefficients
+
+#all pairs z score models
+m.all.z<-lmer(zscore~SenTypeC+(1+SenTypeC|SubID)+(1+SenTypeC|ItemNum),data=d.HLL.pair)
+summary(m.all.z)$coefficients
+```
+
+```{r}
+#item by item analysis
+itemlist<-unique(d.HLL.pair$ItemNum)
+
+#run models for each item and print t values for non-sig items
+nonsigitem <- c()
+for (i in itemlist){
+  m.a<-summary(lm(choice~SenTypeC,data=subset(d.HLL.pair, ItemNum==i)))$coef[, "t value"]
+  if (getElement(m.a, "SenTypeC") < 2){print(paste(i,"  ",formatC(getElement(m.a, "SenTypeC"),digits=2,format="f")))
+    nonsigitem[i]<-i}
+}
+print(paste0(length(unname(nonsigitem)), " non-sig/reversed in raw data"))
+```
+
+```{r}
+#how about z-scores?
+nonsigitem.z <- c()
+for (i in itemlist){
+  m.z<-summary(lm(zscore~SenTypeC,data=subset(d.HLL.pair, ItemNum==i)))$coef[, "t value"]
+  if (getElement(m.z, "SenTypeC") < 2){print(paste(i,"  ",formatC(getElement(m.z, "SenTypeC"),digits=2,format="f")))
+    nonsigitem.z[i]<-i}
+}
+print(paste0(length(unname(nonsigitem.z)), " non-sig/reversed in z-transformed data"))
+```
+
+```{r}
+nonsig<-unname(nonsigitem)
+nonsig.z<-unname(nonsigitem.z)
+
+print("non-sig/reversed in both raw and z-transformed data")
+intersect(nonsig,nonsig.z)
+print("non-sig/reversed in raw data only")
+(onlyraw<-setdiff(nonsig,nonsig.z))
+
+bothnonsig<-intersect(nonsig,nonsig.z)
+```
+
+```{r message=FALSE, warning=FALSE}
+nonsig<-unname(nonsigitem)
+#by-item plot for nonsig
+ggplot(subset(d.HLL.pair,ItemNum %in% nonsig ),aes(x = SenCon, y=as.numeric(choice)))+
+  geom_jitter(alpha = 0.15, aes(colour=SenCon))+
+  stat_summary(geom = "point",fun.y = "mean", aes(color=SenCon),size=2)+
+  stat_summary(geom = "errorbar", fun.data = "mean_cl_boot",colour="black",width = 0.2)+
+  geom_hline(yintercept = 4,colour="blue",linetype = 2)+
+  geom_rect(data = subset(d.HLL.pair,ItemNum %in%bothnonsig),
+            xmin = -Inf,xmax = Inf,ymin = -Inf,ymax = Inf,
+            colour="red",size=1.5,alpha = 0) +
+  facet_wrap(~ItemNum)+
+  scale_y_continuous(breaks=seq(-1,7,2))+
+  labs(x = "Sentence Type", y="Acceptability Rating",title="Non-significant/reversed contrasts")+
+  guides(colour=FALSE) +
+  theme_bw()->p.nonsig.byitem
+p.nonsig.byitem
+
+#show items that non-sig in both rawdata and z-data
+ggplot(subset(d.HLL.pair,ItemNum %in% nonsig.z),aes(x = SenCon, y=as.numeric(choice)))+
+  geom_jitter(alpha = 0.15, aes(colour=SenCon))+
+  stat_summary(geom = "point",fun.y = "mean", aes(color=SenCon),size=1.5)+
+  stat_summary(geom = "errorbar", fun.data = "mean_cl_boot",colour="black",width = 0.25)+
+  geom_hline(yintercept = 4,colour="blue",linetype = 2)+
+  facet_wrap(~ItemNum)+
+  scale_y_continuous(breaks=seq(-1,7,2))+
+  labs(x = "Sentence Type", y="Acceptability Rating")+
+  guides(colour=FALSE)->p.nonsig.inboth.byitem
+p.nonsig.inboth.byitem
+
+#show items that non-sig in only raw data
+ggplot(subset(d.HLL.pair,ItemNum %in% onlyraw),aes(x = SenCon, y=as.numeric(choice)))+
+  geom_jitter(alpha = 0.15, aes(colour=SenCon))+
+  stat_summary(geom = "point",fun.y = "mean", aes(color=SenCon),size=1.5)+
+  stat_summary(geom = "errorbar", fun.data = "mean_cl_boot",colour="black",width = 0.25)+
+  geom_hline(yintercept = 4,colour="blue",linetype = 2)+
+  facet_wrap(~ItemNum)+
+  scale_y_continuous(breaks=seq(-1,7,2))+
+  labs(x = "Sentence Type", y="Acceptability Rating")+
+  guides(colour=FALSE)->p.nonsig.onlyraw.byitem
+#p.nonsig.onlyraw.byitem
+```
+
+```{r message=FALSE, warning=FALSE}
+#by-item plot for nonsig~zcores&raw
+ggplot(subset(d.HLL.pair,ItemNum %in% nonsig.z ),aes(x = SenCon, y=as.numeric(zscore)))+
+  geom_jitter(alpha = 0.2, aes(colour=SenCon))+
+  stat_summary(geom = "point",fun.y = "mean", aes(color=SenCon),size=2)+
+  stat_summary(geom = "errorbar", fun.data = "mean_cl_boot",aes(colour=SenCon),width = 0.2)+
+  geom_hline(yintercept = 0,colour="blue",linetype = 2)+
+  facet_wrap(~ItemNum)+
+  labs(x = "Sentence Type", y="Acceptability rating (z-transformed)",title="Non-significant/reversed contrasts")+
+  guides(colour=FALSE) +
+  theme_bw()->p.nonsig.byitem.z
+p.nonsig.byitem.z
+```
+
+## Non significant items: AJ Experiment
+See "Appendix" of the paper for details  
+```{r}
+#getting the test items
+unname(nonsigitem)
+```
+
+## Items for the Forced-choice Experiment
+### Control 1 item
+```{r message=FALSE}
+# getting the control pairs
+itemlist<-unique(d.HLL.pair$ItemNum)
+itemtvalue <- c()
+itemname <- c()
+x<-1
+for (i in itemlist){
+  m.a<-summary(lm(choice~SenTypeC,data=subset(d.HLL.pair, ItemNum==i)))$coef[, "t value"]
+  itemtvalue[x]<-getElement(m.a, "SenTypeC")
+  itemname[x]<-i
+  x<-x+1
+}
+
+d.itemt <- data.frame(itemnames=itemname,tvalue=itemtvalue)
+d.itemt %>%
+  arrange(-tvalue) %>%
+  top_n(29) %>%   ## used c5-69 and c8-71c as expt instruction examples
+  select(itemnames)%>%
+  unique() %>% 
+  .$itemnames->controlgroup
+remove <- c ("c5-69", "c8-71c")
+ controlgroup.p<-controlgroup[! controlgroup %in% remove]
+```
+
+```{r message=FALSE, warning=FALSE}
+ggplot(subset(d.HLL.pair,ItemNum %in% controlgroup.p ),aes(x = SenCon, y=as.numeric(choice)))+
+  geom_jitter(alpha = 0.05, aes(colour=SenCon))+
+  stat_summary(geom = "point",fun.y = "mean", aes(color=SenCon),size=2)+
+  stat_summary(geom = "errorbar", fun.data = "mean_cl_boot",colour="black",width = 0.2)+
+  geom_hline(yintercept = 4,colour="blue",linetype = 2)+
+  facet_wrap(~ItemNum)+
+  scale_y_continuous(breaks=seq(-1,7,2))+
+  labs(x = "Sentence Type", y="Acceptability Rating",title="Forced choice control 1")+
+  guides(colour=FALSE) +
+  theme_bw()->p.control.byitem
+
+p.control.byitem
+```
+
+# Forced Choice Experiment
+## Cleaning data: FC Experiment
+```{r}
+d.fc<-read.csv("../data/HLL-ForcedChoice-20180922.csv")
+d.fc<-tail(d.fc,-2)
+item.code.FC<-read.csv("../data/item.code.FC.csv")
+```
+
+```{r}
+#now we check catch trials 
+d.fc%>% 
+  filter(Status == 0 & Progress==100 ) %>%  #non-testing+finished
+  select(ResponseId,starts_with("Q3.55"),starts_with("Q3.56"))%>%
+  mutate(Correct55 = ifelse(Q3.55_DO == "2|1", 2, 1)) %>%
+  mutate(Correct56 = ifelse(Q3.56_DO == "2|1", 1, 2))  %>%
+ # filter(Q3.55!=Correct55 & Q3.56!=Correct56)%>%  ## failed both catch q 7 subjects
+  filter(Q3.55!=Correct55 | Q3.56!=Correct56)%>% ## failed any catch q (22 subjects)
+  select(ResponseId)%>%
+  unique()%>%
+  droplevels()%>%
+  .$ResponseId->subtoexclude
+print(paste0(n_distinct(subtoexclude), " subjects excluded"))
+```
+
+```{r message=FALSE, warning=FALSE}
+d.fc%>% 
+  select(-one_of(todrop))%>% 
+  rename(SubGender = Q1.6, SubAge =Q1.7, L1= Q1.8 , 
+         Education=Q1.9,Dialects= Q1.15_1, SubID=ResponseId , 
+         L2=Q1.16_1,ExpOrder=Experiment_DO)%>%
+  filter(Status == 0 & Progress==100 ) %>%  #non-testing+finished
+  select(-Status,-Progress,-Q1.3,-Q1.4,- Q1.17,-starts_with("Q2."),-starts_with("Q4."),-FL_4_DO) %>%
+  filter(!SubID%in%subtoexclude) %>%
+  select(-ends_with("_DO"),-Q3.55,-Q3.56)%>%
+  gather(key = Qnumber,value=choice,Q3.1:Q3.54)%>%
+  inner_join(y=item.code.FC)%>%
+  mutate(GroupNew=ifelse(Group=="test"&ItemNum%in%nonsig.z,"test",ifelse(Group=="control"&!ItemNum%in%nonsigitem,"control 1", "control 2")))->d.fc.ready#3 groups now control 1 control2() and test 
+```
+
+## Participants & Lists information: AJ Experiment  
+```{r}
+#Participants# mean age
+d.fc.ready%>%
+  group_by(SubGender) %>%
+  summarise(count = n_distinct(SubID),age_mean = mean(as.numeric(as.character(SubAge))),age_SD = sd(as.numeric(as.character(SubAge))))
+
+#Participants who have linguistics related background
+d.fc.ready %>%
+  filter(grepl("语言",Q1.12)==T|grepl("语言",Q1.13)==T) %>%
+  summarise(count = n_distinct(SubID))
+```
+
+## Visualiztions: FC Experiment 
+```{r warning=F}
+#visualiztion: general pattern 
+d.fc.ready %>%
+  mutate(answer=ifelse(choice==GoodChoice,"Good","Bad"))%>%
+  group_by(GroupNew,ItemNum,answer) %>%
+  tally()%>%
+  mutate(Proportion = n / sum(n),se = sqrt(Proportion*(1-Proportion)/n))%>%
+  ggplot(aes(x=GroupNew,y=Proportion,fill=answer))+
+  stat_summary(geom = "bar", fun.y = "mean", aes(fill=answer),color="black",position = position_dodge())+
+  stat_summary(geom = "errorbar", fun.data = "mean_cl_boot",position = position_dodge(width = 0.9),width=0.3)+
+  scale_y_continuous(labels=percent_format())+
+  labs(y="Proportion of Choice",x="Group")->p.overall.ex2
+p.overall.ex2
+```
+
+```{r warning=FALSE}
+#Control group 1: Individual-item
+d.fc.ready %>%
+  mutate(answer=ifelse(choice==GoodChoice,"Good","Bad"))%>%
+  group_by(Group,ItemNum,answer) %>%
+  tally()%>%
+  mutate(Proportion = n / sum(n),se = sqrt(Proportion*(1-Proportion)/n))%>%
+  filter(Group=="control")%>%
+  ggplot(aes(x=answer,y=Proportion,fill=answer))+
+  stat_summary(geom = "bar", fun.y = "mean", aes(fill=answer),color="black",position = position_dodge())+
+  scale_y_continuous(labels=percent_format())+
+  facet_wrap(~ItemNum,ncol = 7)+
+  labs(y="Proportion of Choice",title="Control group 1: Individual-item")+
+  scale_fill_discrete(name="Answer")+
+  theme_bw(base_size = 9)+
+  theme(legend.position = c(0.95, 0.09))
+```
+
+```{r warning=FALSE}
+d.fc.ready %>%
+  mutate(answer=ifelse(choice==GoodChoice,"Good","Bad"))%>%
+  group_by(GroupNew,ItemNum,answer) %>%
+  tally()%>%
+  mutate(Proportion = n / sum(n),se = sqrt(Proportion*(1-Proportion)/n))%>%
+  filter(GroupNew=="test")->d.fc.testgroup
+
+ggplot(data=d.fc.testgroup,aes(x=answer,y=Proportion))+
+  stat_summary(geom = "bar", fun.y = "mean", aes(fill=answer),color="black",position = position_dodge())+
+  geom_hline(yintercept = 0.5,colour="blue",linetype = 2)+
+  scale_y_continuous(labels=percent_format())+
+  facet_wrap(~ItemNum,ncol = 6)+
+  labs(y="Proportion of Choice",title="Test group: Individual-item")+
+  scale_fill_discrete(name="Answer")+
+  theme_bw(base_size = 9)+
+  theme(legend.position = c(0.95, 0.09))
+
+```
+
+## Analysis: FC Experiment
+```{r message=FALSE, warning=FALSE}
+#Comparing the "good" vs. "bad" choices. Does the "good"  sigifictly higher than the "bad"(or 50%)?
+#overall: all items 
+#control group
+d.fc.ready %>%
+  group_by(SubID,GroupNew) %>%
+  tally() %>%
+  inner_join(d.fc.ready)%>%
+  mutate(answerC=ifelse(choice==GoodChoice,1,0))  %>%
+  mutate(emplogit=log((answerC+0.5)/(n-answerC+0.5)))->d.fc.ready.model
+
+```
+
+```{r}
+#Three groups: control 1 2 and test
+summary(glmer(answerC~1+(1|SubID)+(1|ItemNum),subset(d.fc.ready.model,GroupNew=="control 1"),family = binomial(link = "logit")))$coefficient
+summary(glmer(answerC~1+(1|SubID)+(1|ItemNum),subset(d.fc.ready.model,GroupNew=="control 2"),family = binomial(link = "logit")))$coefficient
+summary(glmer(answerC~1+(1|SubID)+(1|ItemNum),subset(d.fc.ready.model,GroupNew=="test"),family = binomial(link = "logit")))$coefficient
+```
+
+```{r}
+#item-by-item 
+#control group 1
+itemlist.fc<-unique(subset(d.fc.ready.model,GroupNew=="control 1")$ItemNum)
+
+#run models for each item and print z values 
+#controllist.fc <- c()
+for (i in itemlist.fc){
+  m.fc<-summary(glm(answerC~1,data=subset(d.fc.ready.model,ItemNum==i),family = binomial(link = "logit")))$coef[, "z value"]
+  print(paste(i,"  ",formatC(m.fc,digits=2,format="f")))
+}
+```
+
+```{r}
+#item-by-item 
+#control group 2
+itemlist.fc<-unique(subset(d.fc.ready.model,GroupNew=="control 2")$ItemNum)
+
+#run models for each item and print z values 
+#controllist.fc <- c()
+for (i in itemlist.fc){
+  m.fc<-summary(glm(answerC~1,data=subset(d.fc.ready.model,ItemNum==i),family = binomial(link = "logit")))$coef[, "z value"]
+  print(paste(i,"  ",formatC(m.fc,digits=2,format="f")))
+}
+
+
+
+#get non significent or reversed pairs 
+nonsigitem.fc.c2 <- c()
+for (i in itemlist.fc){
+  m.fc<-summary(glm(answerC~1,data=subset(d.fc.ready.model,ItemNum==i),family = binomial(link = "logit")))$coef[, "z value"]
+  if (m.fc < 2){
+    print(paste(i,"  ",formatC(m.fc,digits=2,format="f")))
+    nonsigitem.fc.c2[i]<-i}
+}
+```
+
+```{r}
+#compare the choice of the good sentences in control and  test group
+contrasts(d.fc.ready.model$Group)<-  contr.sum(2)
+#control    1  test      -1
+
+m.controlvstest<-glmer(answerC~Group+(1+Group|SubID)+(1+Group|ItemNum),data=d.fc.ready.model,
+                       family = binomial(link = "logit"),
+                       control=glmerControl(optimizer="bobyqa"))
+
+summary(m.controlvstest)$coefficients
+#People chose more good sentences (or less bad sentences ) for the control group than the test group. 
+```
+
+
+```{r}
+#item-by-item 
+#test group
+itemlist.fc<-unique(subset(d.fc.ready.model,GroupNew=="test")$ItemNum)
+
+#run models for each item and print z values 
+#controllist.fc <- c()
+for (i in itemlist.fc){
+  m.fc<-summary(glm(answerC~1,data=subset(d.fc.ready.model,ItemNum==i),family = binomial(link = "logit")))$coef[, "z value"]
+  print(paste(i,"  ",formatC(m.fc,digits=2,format="f")))
+}
+```
+
+```{r}
+#get non significent or reversed pairs 
+nonsigitem.fc <- c()
+for (i in itemlist.fc){
+  m.fc<-summary(glm(answerC~1,data=subset(d.fc.ready.model,ItemNum==i),family = binomial(link = "logit")))$coef[, "z value"]
+  if (m.fc < 2){
+    print(paste(i,"  ",formatC(m.fc,digits=2,format="f")))
+    nonsigitem.fc[i]<-i}
+}
+```
+
+```{r warning=FALSE}
+#add  highlight n.s. contrasts to 
+nonsigitemfc<-unname(nonsigitem.fc)
+
+d.fc.ready %>%
+  mutate(answer=ifelse(choice==GoodChoice,"Good","Bad"))%>%
+  group_by(GroupNew,ItemNum,answer) %>%
+  tally()%>%
+  mutate(Proportion = n / sum(n),se = sqrt(Proportion*(1-Proportion)/n))%>%
+  filter(GroupNew=="test")->d.fc.testgroup
+
+ggplot(data=d.fc.testgroup,aes(x=answer,y=Proportion))+
+  stat_summary(geom = "bar", fun.y = "mean", aes(fill=answer),color="black",position = position_dodge())+
+  geom_hline(yintercept = 0.5,colour="blue",linetype = 2)+
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1))+
+  facet_wrap(~ItemNum,ncol = 6)+
+  geom_rect(data = subset(d.fc.testgroup,ItemNum %in% nonsigitemfc),
+            xmin = -Inf,xmax = Inf,ymin = -Inf,ymax = Inf,
+            colour="red",size=1.5,alpha = 0)+
+  labs(y="Proportion of Choice",title="Test group: Individual-item")+
+  scale_fill_discrete(name="Answer")+
+  theme_bw(base_size = 12)+
+  theme(legend.position = c(0.95, 0.09))->p.fc.test.hl
+p.fc.test.hl
+```
+
+```{r warning=FALSE}
+d.fc.ready %>%
+  mutate(answer=ifelse(choice==GoodChoice,"Good","Bad"))%>%
+  group_by(GroupNew,ItemNum,answer) %>%
+  tally()%>%
+  mutate(Proportion = n / sum(n),se = sqrt(Proportion*(1-Proportion)/n))%>%
+  filter(GroupNew=="control 2")->d.fc.control2
+
+ggplot(data=d.fc.control2,aes(x=answer,y=Proportion))+
+  stat_summary(geom = "bar", fun.y = "mean", aes(fill=answer),color="black",position = position_dodge())+
+  geom_hline(yintercept = 0.5,colour="blue",linetype = 2)+
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1))+
+  facet_wrap(~ItemNum,ncol = 5)+
+  geom_rect(data = subset(d.fc.control2,ItemNum %in% nonsigitem.fc.c2),
+            xmin = -Inf,xmax = Inf,ymin = -Inf,ymax = Inf,
+            colour="red",size=1.5,alpha = 0)+
+  labs(y="Proportion of Choice",title="Control 2 group: Individual-item")+
+  scale_fill_discrete(name="Answer")+
+  theme_bw(base_size = 12)+
+  theme(legend.position = c(0.95, 0.09))->p.fc.c2.hl
+
+p.fc.c2.hl
+```
+
+# R Session Information
+```{r}
+sessionInfo()
+```

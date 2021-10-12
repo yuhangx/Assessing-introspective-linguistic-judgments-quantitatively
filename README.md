@@ -1,4 +1,4 @@
-# HLLTextbookProject
+# Assessing introspective linguistic judgments quantitatively
 
 The experimental materials, data, and reproducible code for "Assessing introspective linguistic judgments quantitatively: The case of The Syntax of Chinese" in Journal of East Asian Linguistics
 
